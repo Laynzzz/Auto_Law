@@ -66,7 +66,7 @@ def generate_petition(template_path, output_path, petition_data):
         agent_name = "N/A"
         agent_address = "N/A"
 
-    rent_stabilization_not = " " if is_under_rent_stabilization else "not"
+    rent_stabilization_not = " " if is_under_rent_stabilization else " not "
 
     # Convert number of family to words
     number_of_family = petition_data.get("number_of_family", "1")
@@ -130,6 +130,10 @@ def generate_petition(template_path, output_path, petition_data):
         "COURT_ADDRESS_LINE1": court_address1,
         "COURT_ADDRESS_LINE2": court_address2
     }
+
+    # Add extra respondent names (RESPONDENT2_NAME through RESPONDENT6_NAME)
+    for i in range(2, 7):
+        context[f"RESPONDENT{i}_NAME"] = petition_data.get(f"respondent{i}_name", "")
 
     # Render the template
     doc.render(context)
@@ -245,7 +249,7 @@ class LegalDocApp:
                  font=("Arial", 11, "bold")).grid(row=row, column=0, columnspan=2, sticky="w", padx=20, pady=5)
         row += 1
 
-        ttk.Label(self.scrollable_frame, text="Name: *").grid(row=row, column=0, sticky="w", padx=20, pady=5)
+        ttk.Label(self.scrollable_frame, text="Respondent 1 Name: *").grid(row=row, column=0, sticky="w", padx=20, pady=5)
         self.respondent_name = ttk.Entry(self.scrollable_frame, width=50)
         self.respondent_name.grid(row=row, column=1, padx=20, pady=5)
         row += 1
@@ -258,6 +262,20 @@ class LegalDocApp:
         ttk.Label(self.scrollable_frame, text="Address Line 2: *").grid(row=row, column=0, sticky="w", padx=20, pady=5)
         self.respondent_addr2 = ttk.Entry(self.scrollable_frame, width=50)
         self.respondent_addr2.grid(row=row, column=1, padx=20, pady=5)
+        row += 1
+
+        # Extra respondents container frame
+        self.extra_respondents_frame = ttk.Frame(self.scrollable_frame)
+        self.extra_respondents_frame.grid(row=row, column=0, columnspan=2, sticky="ew")
+        row += 1
+
+        # List of extra respondent dicts: {frame, label, entry, remove_btn}
+        self.extra_respondents = []
+
+        # Add Respondent button
+        self.add_respondent_btn = ttk.Button(self.scrollable_frame, text="+ Add Respondent",
+                                              command=self.add_respondent)
+        self.add_respondent_btn.grid(row=row, column=0, columnspan=2, pady=5)
         row += 1
 
         ttk.Separator(self.scrollable_frame, orient="horizontal").grid(
@@ -406,6 +424,53 @@ class LegalDocApp:
                               relief=tk.SUNKEN, anchor=tk.W)
         status_bar.grid(row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=10)
 
+    def add_respondent(self):
+        """Add an extra respondent name field (max 6 total)"""
+        if len(self.extra_respondents) >= 5:  # respondent 1 + 5 extra = 6 max
+            return
+
+        respondent_num = len(self.extra_respondents) + 2  # starts at 2
+
+        row_frame = ttk.Frame(self.extra_respondents_frame)
+        row_frame.pack(fill="x", pady=2)
+
+        label = ttk.Label(row_frame, text=f"Respondent {respondent_num} Name: *")
+        label.pack(side="left", padx=(20, 5))
+
+        entry = ttk.Entry(row_frame, width=40)
+        entry.pack(side="left", padx=5)
+
+        remove_btn = ttk.Button(row_frame, text="Remove",
+                                 command=lambda: self.remove_respondent(row_frame))
+        remove_btn.pack(side="left", padx=5)
+
+        self.extra_respondents.append({
+            "frame": row_frame,
+            "label": label,
+            "entry": entry,
+            "remove_btn": remove_btn
+        })
+
+        # Disable add button at max
+        if len(self.extra_respondents) >= 5:
+            self.add_respondent_btn.config(state="disabled")
+
+    def remove_respondent(self, target_frame):
+        """Remove an extra respondent and renumber remaining ones"""
+        # Find and remove the target
+        self.extra_respondents = [
+            r for r in self.extra_respondents if r["frame"] != target_frame
+        ]
+        target_frame.destroy()
+
+        # Renumber remaining respondents
+        for i, resp in enumerate(self.extra_respondents):
+            resp["label"].config(text=f"Respondent {i + 2} Name: *")
+
+        # Re-enable add button
+        if len(self.extra_respondents) < 5:
+            self.add_respondent_btn.config(state="normal")
+
     def toggle_company_fields(self):
         """Enable/disable company representative fields"""
         if self.is_petitioner_company.get():
@@ -463,6 +528,12 @@ class LegalDocApp:
             errors.append("Respondent address line 1 is required")
         if not self.respondent_addr2.get().strip():
             errors.append("Respondent address line 2 is required")
+
+        # Validate extra respondent names
+        for i, resp in enumerate(self.extra_respondents):
+            if not resp["entry"].get().strip():
+                errors.append(f"Respondent {i + 2} name is required")
+
         if not self.file_number.get().strip():
             errors.append("File number is required")
 
@@ -495,6 +566,12 @@ class LegalDocApp:
         self.representative_title.delete(0, tk.END)
         self.dwelling_reg_no.delete(0, tk.END)
         self.agent_name.delete(0, tk.END)
+        # Remove all extra respondents
+        for resp in self.extra_respondents:
+            resp["frame"].destroy()
+        self.extra_respondents = []
+        self.add_respondent_btn.config(state="normal")
+
         self.is_petitioner_company.set(False)
         self.is_multiple_dwelling.set(False)
         self.is_rent_stabilization.set(False)
@@ -509,14 +586,20 @@ class LegalDocApp:
         self.status_var.set("Form cleared")
 
     def get_template_path(self):
-        """Get template file path"""
+        """Get template file path based on respondent count"""
+        respondent_count = 1 + len(self.extra_respondents)
+        if respondent_count == 1:
+            filename = "HO NPP Template.docx"
+        else:
+            filename = f"HO NPP Template {respondent_count}.docx"
+
         if getattr(sys, 'frozen', False):
             base_path = sys._MEIPASS
-            template_path = os.path.join(base_path, "HO NPP Template.docx")
+            template_path = os.path.join(base_path, filename)
         else:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(script_dir)
-            template_path = os.path.join(project_root, "templates", "HO", "HO NPP Template.docx")
+            template_path = os.path.join(project_root, "templates", "HO", filename)
         return template_path
 
     def generate_document(self):
@@ -561,6 +644,10 @@ class LegalDocApp:
                 "file_number": self.file_number.get().strip(),
                 "court_part": self.court_part.get()
             }
+
+            # Add extra respondent names
+            for i, resp in enumerate(self.extra_respondents):
+                petition_data[f"respondent{i + 2}_name"] = resp["entry"].get().strip()
 
             # Generate output path
             if getattr(sys, 'frozen', False):
