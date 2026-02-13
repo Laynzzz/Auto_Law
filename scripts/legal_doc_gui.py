@@ -72,6 +72,31 @@ def generate_petition(template_path, output_path, petition_data):
     number_of_family = petition_data.get("number_of_family", "1")
     number_of_family_words = number_to_words(number_of_family)
 
+    # Court addresses based on selection
+    court_part = petition_data.get("court_part", "Queens")
+    court_addresses = {
+        "Queens": {
+            "county": "QUEENS",
+            "address1": "89-17 Sutphin Blvd",
+            "address2": "Jamaica, NY 11435"
+        },
+        "Kings": {
+            "county": "KINGS",
+            "address1": "141 Livingston Street",
+            "address2": "Brooklyn, NY 11201"
+        },
+        "Bronx": {
+            "county": "BRONX",
+            "address1": "1118 Grand Concourse",
+            "address2": "Bronx, NY 10456"
+        }
+    }
+
+    court_info = court_addresses.get(court_part, court_addresses["Queens"])
+    court_county = court_info["county"]
+    court_address1 = court_info["address1"]
+    court_address2 = court_info["address2"]
+
     # Define the context (data to fill)
     context = {
         "PETITIONER_NAME": petition_data["petitioner_name"],
@@ -98,7 +123,12 @@ def generate_petition(template_path, output_path, petition_data):
         "NOTICE_TYPE": petition_data["notice_type"],
         # Family information
         "NUMBER_OF_FAMILY": number_of_family,
-        "NUMBER_OF_FAMILY_WORDS": number_of_family_words
+        "NUMBER_OF_FAMILY_WORDS": number_of_family_words,
+        # Case information
+        "FILE_NUMBER": petition_data["file_number"],
+        "COURT_COUNTY": court_county,
+        "COURT_ADDRESS_LINE1": court_address1,
+        "COURT_ADDRESS_LINE2": court_address2
     }
 
     # Render the template
@@ -259,6 +289,28 @@ class LegalDocApp:
         )
         row += 1
 
+        # CASE INFORMATION SECTION
+        ttk.Label(self.scrollable_frame, text="CASE INFORMATION",
+                 font=("Arial", 11, "bold")).grid(row=row, column=0, columnspan=2, sticky="w", padx=20, pady=5)
+        row += 1
+
+        ttk.Label(self.scrollable_frame, text="File Number: *").grid(row=row, column=0, sticky="w", padx=20, pady=5)
+        self.file_number = ttk.Entry(self.scrollable_frame, width=50)
+        self.file_number.grid(row=row, column=1, padx=20, pady=5)
+        row += 1
+
+        ttk.Label(self.scrollable_frame, text="Court Part: *").grid(row=row, column=0, sticky="w", padx=20, pady=5)
+        self.court_part = ttk.Combobox(self.scrollable_frame, width=47, state="readonly")
+        self.court_part['values'] = ('Queens', 'Kings', 'Bronx')
+        self.court_part.current(0)  # Default to Queens
+        self.court_part.grid(row=row, column=1, padx=20, pady=5, sticky="w")
+        row += 1
+
+        ttk.Separator(self.scrollable_frame, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=10
+        )
+        row += 1
+
         # PROPERTY SECTION
         ttk.Label(self.scrollable_frame, text="PROPERTY INFORMATION",
                  font=("Arial", 11, "bold")).grid(row=row, column=0, columnspan=2, sticky="w", padx=20, pady=5)
@@ -411,6 +463,8 @@ class LegalDocApp:
             errors.append("Respondent address line 1 is required")
         if not self.respondent_addr2.get().strip():
             errors.append("Respondent address line 2 is required")
+        if not self.file_number.get().strip():
+            errors.append("File number is required")
 
         # Check company fields
         if self.is_petitioner_company.get():
@@ -448,6 +502,8 @@ class LegalDocApp:
         self.notice_type.current(0)  # Reset to oral
         self.number_of_family.delete(0, tk.END)  # Clear field
         self.number_of_family.insert(0, "1")  # Reset to 1
+        self.file_number.delete(0, tk.END)  # Clear file number
+        self.court_part.current(0)  # Reset to Queens
         self.toggle_company_fields()
         self.toggle_dwelling_fields()
         self.status_var.set("Form cleared")
@@ -460,7 +516,7 @@ class LegalDocApp:
         else:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(script_dir)
-            template_path = os.path.join(project_root, "templates", "HO NPP Template.docx")
+            template_path = os.path.join(project_root, "templates", "HO", "HO NPP Template.docx")
         return template_path
 
     def generate_document(self):
@@ -501,7 +557,9 @@ class LegalDocApp:
                 "agent_name": self.agent_name.get().strip(),
                 "notice_days": self.notice_days.get(),
                 "notice_type": self.notice_type.get(),
-                "number_of_family": self.number_of_family.get()
+                "number_of_family": self.number_of_family.get(),
+                "file_number": self.file_number.get().strip(),
+                "court_part": self.court_part.get()
             }
 
             # Generate output path
