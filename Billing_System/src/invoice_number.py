@@ -16,7 +16,7 @@ from src.dataset import dataset_path, PROJECT_ROOT
 
 
 def _counter_path(firm_name: str) -> Path:
-    return PROJECT_ROOT / "data" / firm_name / "invoice_counter.json"
+    return PROJECT_ROOT / "invoice" / firm_name / "invoice_counter.json"
 
 
 def _load_counter(firm_name: str) -> dict:

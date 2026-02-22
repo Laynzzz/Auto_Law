@@ -5,8 +5,8 @@ Replaces [[placeholder]] tokens in runs, preserving formatting.
 Converts the filled .docx to .pdf via docx2pdf (Word COM on Windows).
 
 Output structure:
-    invoice/{FirmName}/{Month}/report/word/MM-DD-YYYY Case Name.docx
-    invoice/{FirmName}/{Month}/report/pdf/MM-DD-YYYY Case Name.pdf
+    invoice/{FirmName}/{YYYY}/{Mon}/Week of MM-DD-YYYY/report/word/MM-DD-YYYY Case Name.docx
+    invoice/{FirmName}/{YYYY}/{Mon}/Week of MM-DD-YYYY/report/pdf/MM-DD-YYYY Case Name.pdf
 """
 
 from datetime import datetime
@@ -16,7 +16,7 @@ from docx import Document
 from docx2pdf import convert
 
 from src.config import get_firm, load_config
-from src.dataset import find_row_by_key, PROJECT_ROOT
+from src.dataset import find_row_by_key, week_range, PROJECT_ROOT
 
 TEMPLATE_PATH = PROJECT_ROOT / "template" / "perdiem.docx"
 
@@ -125,8 +125,8 @@ def generate_invoice(
     """Full pipeline: look up case, fill template, convert to PDF.
 
     Output structure:
-        invoice/{firm}/{month}/report/word/MM-DD-YYYY Case Name.docx
-        invoice/{firm}/{month}/report/pdf/MM-DD-YYYY Case Name.pdf
+        invoice/{firm}/{YYYY}/{Mon}/Week of MM-DD-YYYY/report/word/MM-DD-YYYY Case Name.docx
+        invoice/{firm}/{YYYY}/{Mon}/Week of MM-DD-YYYY/report/pdf/MM-DD-YYYY Case Name.pdf
 
     Returns the path to the generated PDF.
     """
@@ -151,12 +151,20 @@ def generate_invoice(
 
     # Build output paths
     dt = _parse_date(case.get("appearance_date"))
-    month_folder = dt.strftime("%b %Y")           # e.g. "Feb 2026"
+    year_folder = str(dt.year)                     # e.g. "2026"
+    month_folder = dt.strftime("%b")               # e.g. "Feb"
     date_prefix = dt.strftime("%m-%d-%Y")          # e.g. "02-20-2026"
     caption = str(case.get("case_caption") or "case")
     filename = f"{date_prefix} {caption}"
 
-    base_dir = PROJECT_ROOT / "invoice" / firm_name / month_folder / "report"
+    # Week folder: "Week of MM-DD-YYYY" based on Monday of the case's week
+    monday, _ = week_range(dt.date() if isinstance(dt, datetime) else dt)
+    week_folder = f"Week of {monday.strftime('%m-%d-%Y')}"
+
+    base_dir = (
+        PROJECT_ROOT / "invoice" / firm_name
+        / year_folder / month_folder / week_folder / "report"
+    )
     docx_out = base_dir / "word" / f"{filename}.docx"
     pdf_out = base_dir / "pdf" / f"{filename}.pdf"
 

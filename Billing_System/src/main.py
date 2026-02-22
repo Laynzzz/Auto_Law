@@ -16,6 +16,7 @@ from src.dataset import (
 )
 from src.doc_generator import generate_invoice
 from src.invoice_number import assign_invoice_numbers
+from src.weekly_statement import generate_weekly_statement
 
 
 @click.group()
@@ -221,13 +222,34 @@ def generate_daily(ctx, firm, index_number, appearance_date, keep_docx):
     click.echo(f"Invoice generated: {pdf_path}")
 
 
-# ── Phase 7 placeholder ──────────────────────────────────────────────
+# ── Phase 7: weekly statement ─────────────────────────────────────────
 
 
 @cli.command("generate-weekly")
-def generate_weekly():
-    """(Phase 7) Generate a weekly invoice batch."""
-    click.echo("Not yet implemented — coming in Phase 7.")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--week-of", required=True, help="Any date within the week (YYYY-MM-DD). Mon-Fri range is computed.")
+@click.option("--keep-docx", is_flag=True, help="Keep intermediate .docx file.")
+@click.pass_context
+def generate_weekly(ctx, firm, week_of, keep_docx):
+    """Generate a weekly statement of account for a firm."""
+    from datetime import date as _date
+
+    cfg = ctx.obj["config"]
+    known = all_firm_names(cfg)
+    if firm not in known:
+        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
+
+    try:
+        ref = _date.fromisoformat(week_of)
+    except ValueError:
+        raise click.ClickException(f"Invalid date: {week_of}. Use YYYY-MM-DD.")
+
+    try:
+        pdf_path = generate_weekly_statement(firm, ref, cfg, keep_docx=keep_docx)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"Weekly statement generated: {pdf_path}")
 
 
 # ── Phase 8 placeholder ──────────────────────────────────────────────

@@ -1,12 +1,12 @@
 """Master dataset (source-of-truth) schema and operations.
 
-Each law firm has its own dataset at  data/{FirmName}/master_{FirmName}.xlsx
+Each law firm has its own dataset at  invoice/{FirmName}/master_{FirmName}.xlsx
 (sheet: 'cases').  Each row represents one coverage appearance / billable event.
 
 Unique key within a firm file:  (index_number, appearance_date)
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -52,8 +52,8 @@ PROJECT_ROOT = CONFIG_PATH.parent.parent
 
 
 def dataset_path(firm_name: str) -> Path:
-    """Return path to a firm's master dataset: data/{firm_name}/master_{firm_name}.xlsx"""
-    return PROJECT_ROOT / "data" / firm_name / f"master_{firm_name}.xlsx"
+    """Return path to a firm's master dataset: invoice/{firm_name}/master_{firm_name}.xlsx"""
+    return PROJECT_ROOT / "invoice" / firm_name / f"master_{firm_name}.xlsx"
 
 
 def all_firm_names(config: dict | None = None) -> list[str]:
@@ -276,6 +276,51 @@ def _match_key(ws, headers: list[str], index_number: str, appearance_date: str) 
         if row_idx == target_idx and row_date == target_date:
             return row_num
     return None
+
+
+# ── Query ─────────────────────────────────────────────────────────────
+
+
+def _to_date(val) -> date | None:
+    """Coerce a value to a date object, or None."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    try:
+        return datetime.strptime(str(val).split(" ")[0], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def query_by_date_range(
+    firm_name: str,
+    start: date,
+    end: date,
+    rows: list[dict] | None = None,
+) -> list[dict]:
+    """Return rows whose appearance_date falls within [start, end] inclusive."""
+    if rows is None:
+        rows = load_dataset(firm_name)
+
+    result = []
+    for row in rows:
+        d = _to_date(row.get("appearance_date"))
+        if d is not None and start <= d <= end:
+            result.append(row)
+
+    # Sort by appearance_date
+    result.sort(key=lambda r: _to_date(r.get("appearance_date")) or date.min)
+    return result
+
+
+def week_range(ref_date: date) -> tuple[date, date]:
+    """Return (monday, friday) of the business week containing ref_date."""
+    monday = ref_date - timedelta(days=ref_date.weekday())  # weekday: Mon=0
+    friday = monday + timedelta(days=4)
+    return monday, friday
 
 
 def upsert_row(firm_name: str, row_data: dict) -> str:
