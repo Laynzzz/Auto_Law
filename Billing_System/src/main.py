@@ -16,6 +16,8 @@ from src.dataset import (
 )
 from src.doc_generator import generate_invoice
 from src.invoice_number import assign_invoice_numbers
+from src.ledger_export import export_ledger
+from src.monthly_statement import generate_monthly_statement
 from src.weekly_statement import generate_weekly_statement
 
 
@@ -252,22 +254,69 @@ def generate_weekly(ctx, firm, week_of, keep_docx):
     click.echo(f"Weekly statement generated: {pdf_path}")
 
 
-# ── Phase 8 placeholder ──────────────────────────────────────────────
+# ── Phase 8: monthly statement ───────────────────────────────────────
 
 
 @cli.command("generate-monthly")
-def generate_monthly():
-    """(Phase 8) Generate a monthly invoice summary."""
-    click.echo("Not yet implemented — coming in Phase 8.")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--year", required=True, type=int, help="Year (e.g. 2026).")
+@click.option("--month", required=True, type=int, help="Month number (1-12).")
+@click.option("--keep-docx", is_flag=True, help="Keep intermediate .docx file.")
+@click.pass_context
+def generate_monthly(ctx, firm, year, month, keep_docx):
+    """Generate a monthly statement of account for a firm."""
+    cfg = ctx.obj["config"]
+    known = all_firm_names(cfg)
+    if firm not in known:
+        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
+
+    if not (1 <= month <= 12):
+        raise click.ClickException(f"Invalid month: {month}. Must be 1-12.")
+
+    try:
+        pdf_path = generate_monthly_statement(firm, year, month, cfg, keep_docx=keep_docx)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"Monthly statement generated: {pdf_path}")
 
 
-# ── Phase 9 placeholder ──────────────────────────────────────────────
+# ── Phase 9: master ledger export ────────────────────────────────────
 
 
 @cli.command("export-ledger")
-def export_ledger():
-    """(Phase 9) Export the billing ledger to Excel."""
-    click.echo("Not yet implemented — coming in Phase 9.")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--asof", default=None, help="As-of date (YYYY-MM-DD). Defaults to today.")
+@click.option("--no-xlsx", is_flag=True, help="Skip XLSX generation (PDF only).")
+@click.option("--keep-docx", is_flag=True, help="Keep intermediate .docx file.")
+@click.pass_context
+def export_ledger_cmd(ctx, firm, asof, no_xlsx, keep_docx):
+    """Export a firm's full-history master ledger (PDF + XLSX)."""
+    from datetime import date as _date
+
+    cfg = ctx.obj["config"]
+    known = all_firm_names(cfg)
+    if firm not in known:
+        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
+
+    as_of_date = None
+    if asof:
+        try:
+            as_of_date = _date.fromisoformat(asof)
+        except ValueError:
+            raise click.ClickException(f"Invalid date: {asof}. Use YYYY-MM-DD.")
+
+    try:
+        result = export_ledger(
+            firm, as_of=as_of_date, config=cfg,
+            keep_docx=keep_docx, xlsx=not no_xlsx,
+        )
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"Ledger PDF: {result['pdf']}")
+    if "xlsx" in result:
+        click.echo(f"Ledger XLSX: {result['xlsx']}")
 
 
 # ── Phase 11 placeholder ─────────────────────────────────────────────

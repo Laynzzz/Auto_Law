@@ -1,156 +1,201 @@
 """Weekly Statement of Account generator.
 
-Builds a summary document per firm for a given business week (Mon-Fri).
-No new invoice numbers are assigned — this is a recap only.
+Uses template/weekly_statement.docx as the template.
+Replaces [[placeholder]] tokens (handling cross-run splits) and fills the
+case table with data rows.
 
 Output structure:
     invoice/{FirmName}/{YYYY}/{Mon}/Week of MM-DD-YYYY/Week of MM-DD-YYYY.docx
     invoice/{FirmName}/{YYYY}/{Mon}/Week of MM-DD-YYYY/Week of MM-DD-YYYY.pdf
 """
 
+import copy
 from datetime import date
 from pathlib import Path
 
 from docx import Document
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Pt
 from docx2pdf import convert
 
 from src.config import get_firm, load_config
 from src.dataset import PROJECT_ROOT, query_by_date_range, week_range, _to_date
-from src.doc_generator import _format_date_display, _ordinal
+from src.doc_generator import _format_date_display
+
+TEMPLATE_PATH = PROJECT_ROOT / "template" / "weekly_statement.docx"
 
 
-# ── Build document ───────────────────────────────────────────────────
+# ── Cross-run placeholder replacement ────────────────────────────────
 
-TABLE_COLUMNS = ["Date", "Invoice #", "Index #", "Case Caption", "Court", "Amount"]
-COL_WIDTHS = [1.0, 1.0, 1.1, 1.8, 1.3, 0.8]  # inches, total ~7.0
+def _replace_in_paragraph(paragraph, placeholders: dict[str, str]) -> None:
+    """Replace [[placeholder]] tokens that may span multiple runs.
+
+    Joins all run texts, performs replacements, then redistributes text
+    back into runs (all text goes into the first run; remaining runs are
+    cleared).  This preserves the first run's formatting.
+    """
+    runs = paragraph.runs
+    if not runs:
+        return
+
+    full_text = "".join(r.text for r in runs)
+
+    # Quick check — skip if no placeholder present
+    if "[[" not in full_text:
+        return
+
+    new_text = full_text
+    for token, value in placeholders.items():
+        new_text = new_text.replace(token, value)
+
+    if new_text == full_text:
+        return  # nothing changed
+
+    # Put all text in the first run, clear the rest
+    runs[0].text = new_text
+    for run in runs[1:]:
+        run.text = ""
 
 
-def _build_statement(
+def _replace_all_placeholders(doc: Document, placeholders: dict[str, str]) -> None:
+    """Replace placeholders in all paragraphs and table cells."""
+    for paragraph in doc.paragraphs:
+        _replace_in_paragraph(paragraph, placeholders)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    _replace_in_paragraph(paragraph, placeholders)
+
+
+# ── Table row helpers ────────────────────────────────────────────────
+
+def _clone_row(table, source_row_idx: int) -> None:
+    """Clone a table row (deep copy of XML) and insert it right after the source row."""
+    source_tr = table.rows[source_row_idx]._tr
+    new_tr = copy.deepcopy(source_tr)
+    source_tr.addnext(new_tr)
+
+
+def _set_cell_text(row, col_idx: int, text: str) -> None:
+    """Set cell text preserving existing paragraph/run formatting.
+
+    If the cell has existing runs, reuses the first run's formatting.
+    If empty (no runs), creates a run matching the template style
+    (Calibri 10pt).
+    """
+    cell = row.cells[col_idx]
+    for paragraph in cell.paragraphs:
+        runs = paragraph.runs
+        if runs:
+            runs[0].text = text
+            for r in runs[1:]:
+                r.text = ""
+        else:
+            run = paragraph.add_run(text)
+            run.font.name = "Calibri"
+            run.font.size = Pt(10)
+            run.font.bold = False
+
+
+def _clear_row(row, num_cols: int) -> None:
+    """Clear all cells in a row."""
+    for i in range(num_cols):
+        _set_cell_text(row, i, "")
+
+
+# ── Fill template ────────────────────────────────────────────────────
+
+def _fill_weekly_template(
     firm_name: str,
     monday: date,
     friday: date,
     cases: list[dict],
+    firm: dict,
     output_docx: Path,
 ) -> Path:
-    """Create a weekly statement .docx and save to output_docx."""
-    doc = Document()
+    """Fill the weekly_statement.docx template and save."""
+    doc = Document(str(TEMPLATE_PATH))
 
-    # ── Page margins
-    for section in doc.sections:
-        section.left_margin = Inches(0.6)
-        section.right_margin = Inches(0.6)
+    # Period string: "02/16/26 - 02/20/26"
+    period_str = f"{monday.strftime('%m/%d/%y')} - {friday.strftime('%m/%d/%y')}"
 
-    # ── Header
-    h = doc.add_paragraph()
-    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = h.add_run("PICERNO & ASSOCIATES, PLLC")
-    run.bold = True
-    run.font.size = Pt(14)
+    # Header/body placeholders
+    header_placeholders = {
+        "[[week date]]": period_str,
+        "[[Date]]": _format_date_display(date.today().isoformat()),
+        "[[Name]]": firm.get("contact_name", ""),
+        "[[Company Name]]": firm.get("name", ""),
+        "[[Address 1]]": firm.get("address_1", ""),
+        "[[Address 2]]": firm.get("address_2", ""),
+    }
 
-    sub = doc.add_paragraph()
-    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = sub.add_run("Weekly Statement of Account")
-    run.font.size = Pt(12)
+    # Replace header/body placeholders (paragraphs + table[0] title)
+    for paragraph in doc.paragraphs:
+        _replace_in_paragraph(paragraph, header_placeholders)
 
-    # ── Firm & date range
-    doc.add_paragraph()
-    info = doc.add_paragraph()
-    info.add_run("Firm: ").bold = True
-    info.add_run(firm_name)
+    # Also replace in table[0] (the "WEEKLY STATMENT" banner) in case it has placeholders
+    if doc.tables:
+        for row in doc.tables[0].rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    _replace_in_paragraph(paragraph, header_placeholders)
 
-    period = doc.add_paragraph()
-    period.add_run("Period: ").bold = True
-    period.add_run(
-        f"{_format_date_display(monday.isoformat())} - "
-        f"{_format_date_display(friday.isoformat())}"
-    )
+    # ── Fill case table (table[1]) ───────────────────────────────────
+    case_table = doc.tables[1]
+    num_cols = 4  # Date, Index No., Case Caption, Amount
 
-    # ── Disclaimer
-    doc.add_paragraph()
-    disc = doc.add_paragraph()
-    disc.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = disc.add_run(
-        "This statement summarizes invoices previously sent. "
-        "No new charges are added."
-    )
-    run.italic = True
-    run.font.size = Pt(9)
+    # Template has: row 0 = header, row 1 = template data row,
+    # rows 2-10 = empty, row 11 = total row.
+    # Pre-allocated data slots = rows 1 through 10 (10 rows).
+    pre_allocated = 10  # rows 1..10
+    total_row_idx = 11  # original index of the TOTAL row
 
-    doc.add_paragraph()
+    # If we need more rows than pre-allocated, clone the template row
+    if len(cases) > pre_allocated:
+        extra_needed = len(cases) - pre_allocated
+        # Insert clones before the total row (after last pre-allocated row)
+        for _ in range(extra_needed):
+            _clone_row(case_table, 1)  # clone template row format
+        # Total row index shifts
+        total_row_idx = 1 + len(cases)
 
-    # ── Table
-    table = doc.add_table(rows=1, cols=len(TABLE_COLUMNS))
-    table.style = "Light Grid Accent 1"
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    # Header row
-    for i, name in enumerate(TABLE_COLUMNS):
-        cell = table.rows[0].cells[i]
-        cell.text = name
-        for p in cell.paragraphs:
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for r in p.runs:
-                r.bold = True
-                r.font.size = Pt(9)
-
-    # Column widths
-    for i, w in enumerate(COL_WIDTHS):
-        table.columns[i].width = Inches(w)
-
-    # Data rows
-    total = 0.0
-    for case in cases:
-        row = table.add_row()
+    # Fill case data into rows 1..N
+    total_fee = 0.0
+    for i, case in enumerate(cases):
+        row = case_table.rows[1 + i]
         d = _to_date(case.get("appearance_date"))
         date_str = d.strftime("%m/%d/%Y") if d else ""
         amt = float(case.get("charge_amount") or 0)
-        total += amt
+        total_fee += amt
 
-        values = [
-            date_str,
-            str(case.get("invoice_number") or ""),
-            str(case.get("index_number") or ""),
-            str(case.get("case_caption") or ""),
-            str(case.get("court") or ""),
-            f"${amt:,.2f}",
-        ]
-        for i, val in enumerate(values):
-            cell = row.cells[i]
-            cell.text = val
-            for p in cell.paragraphs:
-                p.alignment = (
-                    WD_ALIGN_PARAGRAPH.RIGHT if i == len(values) - 1
-                    else WD_ALIGN_PARAGRAPH.LEFT
-                )
-                for r in p.runs:
-                    r.font.size = Pt(9)
+        _set_cell_text(row, 0, date_str)
+        _set_cell_text(row, 1, str(case.get("index_number") or ""))
+        _set_cell_text(row, 2, str(case.get("case_caption") or ""))
+        _set_cell_text(row, 3, f"${amt:,.2f}")
 
-    # Total row
-    total_row = table.add_row()
-    for i in range(len(TABLE_COLUMNS)):
-        cell = total_row.cells[i]
-        if i == len(TABLE_COLUMNS) - 2:
-            cell.text = "Total:"
-            for p in cell.paragraphs:
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                for r in p.runs:
-                    r.bold = True
-                    r.font.size = Pt(9)
-        elif i == len(TABLE_COLUMNS) - 1:
-            cell.text = f"${total:,.2f}"
-            for p in cell.paragraphs:
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                for r in p.runs:
-                    r.bold = True
-                    r.font.size = Pt(9)
+    # Clear any unused pre-allocated rows (if fewer cases than slots)
+    used_data_rows = len(cases)
+    total_data_slots = max(pre_allocated, len(cases))
+    for i in range(used_data_rows, total_data_slots):
+        row = case_table.rows[1 + i]
+        _clear_row(row, num_cols)
 
-    # ── Count summary
-    doc.add_paragraph()
-    summary = doc.add_paragraph()
-    summary.add_run(f"Total cases: {len(cases)}").font.size = Pt(9)
+    # Replace [[total fee]] in the total row
+    total_row = case_table.rows[total_row_idx]
+    for cell in total_row.cells:
+        for paragraph in cell.paragraphs:
+            _replace_in_paragraph(paragraph, {
+                "[[total fee]]": f"{total_fee:,.2f}",
+            })
+
+    # Also clear placeholder from template row 1 if no cases
+    if not cases:
+        row1 = case_table.rows[1]
+        for placeholder in ["[[case date]]", "[[case no]]", "[[case caption]]", "[[case fee]]"]:
+            for cell in row1.cells:
+                for paragraph in cell.paragraphs:
+                    _replace_in_paragraph(paragraph, {placeholder: ""})
 
     output_docx.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(output_docx))
@@ -173,6 +218,7 @@ def generate_weekly_statement(
     if config is None:
         config = load_config()
 
+    firm = get_firm(firm_name, config)
     monday, friday = week_range(week_of)
     cases = query_by_date_range(firm_name, monday, friday)
 
@@ -187,8 +233,8 @@ def generate_weekly_statement(
     docx_out = base_dir / f"{week_folder}.docx"
     pdf_out = base_dir / f"{week_folder}.pdf"
 
-    # Build document
-    _build_statement(firm_name, monday, friday, cases, docx_out)
+    # Fill template
+    _fill_weekly_template(firm_name, monday, friday, cases, firm, docx_out)
 
     # Convert to PDF
     pdf_out.parent.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,7 @@ Each law firm has its own dataset at  invoice/{FirmName}/master_{FirmName}.xlsx
 Unique key within a firm file:  (index_number, appearance_date)
 """
 
+import calendar
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -321,6 +322,14 @@ def week_range(ref_date: date) -> tuple[date, date]:
     monday = ref_date - timedelta(days=ref_date.weekday())  # weekday: Mon=0
     friday = monday + timedelta(days=4)
     return monday, friday
+
+
+def month_range(year: int, month: int) -> tuple[date, date]:
+    """Return (first_day, last_day) of the given month."""
+    first = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    last = date(year, month, last_day)
+    return first, last
 
 
 def upsert_row(firm_name: str, row_data: dict) -> str:
