@@ -3,24 +3,9 @@
 import click
 
 from src.config import load_config
-from src.dataset import (
-    COLUMNS,
-    VALID_CASE_STATUSES,
-    all_firm_names,
-    create_all_workbooks,
-    create_workbook,
-    dataset_path,
-    load_dataset,
-    upsert_row,
-    validate_dataset,
-)
-from src.doc_generator import generate_invoice
-from src.invoice_number import assign_invoice_numbers
-from src.ledger_export import export_ledger
-from src.legacy_import import import_legacy_invoice
-from src.monthly_statement import generate_monthly_statement
-from src.payment import mark_payment, find_by_invoice_number, VALID_STATUSES
-from src.weekly_statement import generate_weekly_statement
+from src.dataset import COLUMNS, VALID_CASE_STATUSES
+from src.payment import VALID_STATUSES
+from src.services import case_service, doc_service, payment_service
 
 
 @click.group()
@@ -67,19 +52,10 @@ def config_check(ctx):
 @click.pass_context
 def init_dataset(ctx, firm, force):
     """Create master_cases.xlsx per firm (one file per law firm)."""
-    cfg = ctx.obj["config"]
-    firms = [firm] if firm else all_firm_names(cfg)
-
-    for name in firms:
-        try:
-            path = create_workbook(name, overwrite=force)
-            click.echo(f"Created: {path}")
-        except FileExistsError as e:
-            raise click.ClickException(str(e))
-
-    click.echo(f"\n  Sheet: cases")
-    click.echo(f"  Columns ({len(COLUMNS)}): {', '.join(COLUMNS)}")
-    click.echo(f"  Initialized {len(firms)} firm(s).")
+    result = case_service.init_datasets(firm=firm, force=force, config=ctx.obj["config"])
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 @cli.command("validate-dataset")
@@ -87,31 +63,10 @@ def init_dataset(ctx, firm, force):
 @click.pass_context
 def validate_dataset_cmd(ctx, firm):
     """Validate master_cases.xlsx for each firm."""
-    cfg = ctx.obj["config"]
-    firms = [firm] if firm else all_firm_names(cfg)
-    total_errors = 0
-
-    for name in firms:
-        path = dataset_path(name)
-        click.echo(f"--- {name} ---")
-        click.echo(f"  File: {path}")
-
-        errors = validate_dataset(name)
-        if errors:
-            click.echo(f"  FAILED - {len(errors)} error(s):")
-            for err in errors:
-                click.echo(f"    - {err}")
-            total_errors += len(errors)
-        else:
-            rows = load_dataset(name)
-            click.echo(f"  OK - {len(rows)} data row(s)")
-        click.echo()
-
-    if total_errors:
-        click.echo(f"Total errors across all firms: {total_errors}")
+    result = case_service.validate_datasets(firm=firm, config=ctx.obj["config"])
+    click.echo(result.message)
+    if not result.success:
         raise SystemExit(1)
-    else:
-        click.echo(f"All {len(firms)} firm(s) validated OK.")
 
 
 # ── Phase 3: add/update case ──────────────────────────────────────────
@@ -131,45 +86,14 @@ def validate_dataset_cmd(ctx, firm):
 def add_case(ctx, firm, appearance_date, index_number, case_caption, charge_amount,
              court, outcome, case_status, notes):
     """Add or update a case in a firm's dataset."""
-    cfg = ctx.obj["config"]
-
-    # Validate firm exists in config
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
-
-    row_data = {
-        "appearance_date": appearance_date,
-        "index_number": index_number,
-        "case_caption": case_caption,
-        "charge_amount": charge_amount,
-        "court": court,
-        "outcome": outcome,
-        "case_status": case_status,
-        "notes": notes,
-    }
-
-    # Remove None values so updates don't blank out existing fields
-    row_data = {k: v for k, v in row_data.items() if v is not None}
-
-    try:
-        action = upsert_row(firm, row_data)
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
-    click.echo(f"Case {action}: {firm}")
-    click.echo(f"  index_number:    {index_number}")
-    click.echo(f"  appearance_date: {appearance_date}")
-    click.echo(f"  case_caption:    {case_caption}")
-    click.echo(f"  charge_amount:   {charge_amount}")
-    if court:
-        click.echo(f"  court:           {court}")
-    if outcome:
-        click.echo(f"  outcome:         {outcome}")
-    if case_status:
-        click.echo(f"  case_status:     {case_status}")
-    if notes:
-        click.echo(f"  notes:           {notes}")
+    result = case_service.add_or_update_case(
+        firm, appearance_date, index_number, case_caption, charge_amount,
+        court=court, outcome=outcome, case_status=case_status, notes=notes,
+        config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 4: invoice numbering ────────────────────────────────────────
@@ -180,23 +104,10 @@ def add_case(ctx, firm, appearance_date, index_number, case_caption, charge_amou
 @click.pass_context
 def assign_invoices(ctx, firm):
     """Assign invoice numbers to cases that don't have one yet."""
-    cfg = ctx.obj["config"]
-    firms = [firm] if firm else all_firm_names(cfg)
-
-    for name in firms:
-        click.echo(f"--- {name} ---")
-        try:
-            assigned = assign_invoice_numbers(name, cfg)
-        except FileNotFoundError as e:
-            raise click.ClickException(str(e))
-
-        if assigned:
-            for inv in assigned:
-                click.echo(f"  Assigned: {inv}")
-            click.echo(f"  Total new: {len(assigned)}")
-        else:
-            click.echo("  No cases need invoice numbers.")
-        click.echo()
+    result = case_service.assign_invoices(firm=firm, config=ctx.obj["config"])
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 5: generate daily invoice ───────────────────────────────────
@@ -210,20 +121,13 @@ def assign_invoices(ctx, firm):
 @click.pass_context
 def generate_daily(ctx, firm, index_number, appearance_date, keep_docx):
     """Generate a per-diem invoice PDF for a specific case."""
-    cfg = ctx.obj["config"]
-
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
-
-    try:
-        pdf_path = generate_invoice(
-            firm, index_number, appearance_date, cfg, keep_docx=keep_docx
-        )
-    except (ValueError, FileNotFoundError) as e:
-        raise click.ClickException(str(e))
-
-    click.echo(f"Invoice generated: {pdf_path}")
+    result = doc_service.generate_daily(
+        firm, index_number, appearance_date,
+        keep_docx=keep_docx, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 7: weekly statement ─────────────────────────────────────────
@@ -236,24 +140,12 @@ def generate_daily(ctx, firm, index_number, appearance_date, keep_docx):
 @click.pass_context
 def generate_weekly(ctx, firm, week_of, keep_docx):
     """Generate a weekly statement of account for a firm."""
-    from datetime import date as _date
-
-    cfg = ctx.obj["config"]
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
-
-    try:
-        ref = _date.fromisoformat(week_of)
-    except ValueError:
-        raise click.ClickException(f"Invalid date: {week_of}. Use YYYY-MM-DD.")
-
-    try:
-        pdf_path = generate_weekly_statement(firm, ref, cfg, keep_docx=keep_docx)
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
-    click.echo(f"Weekly statement generated: {pdf_path}")
+    result = doc_service.generate_weekly(
+        firm, week_of, keep_docx=keep_docx, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 8: monthly statement ───────────────────────────────────────
@@ -267,20 +159,12 @@ def generate_weekly(ctx, firm, week_of, keep_docx):
 @click.pass_context
 def generate_monthly(ctx, firm, year, month, keep_docx):
     """Generate a monthly statement of account for a firm."""
-    cfg = ctx.obj["config"]
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
-
-    if not (1 <= month <= 12):
-        raise click.ClickException(f"Invalid month: {month}. Must be 1-12.")
-
-    try:
-        pdf_path = generate_monthly_statement(firm, year, month, cfg, keep_docx=keep_docx)
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
-    click.echo(f"Monthly statement generated: {pdf_path}")
+    result = doc_service.generate_monthly(
+        firm, year, month, keep_docx=keep_docx, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 9: master ledger export ────────────────────────────────────
@@ -294,31 +178,13 @@ def generate_monthly(ctx, firm, year, month, keep_docx):
 @click.pass_context
 def export_ledger_cmd(ctx, firm, asof, no_xlsx, keep_docx):
     """Export a firm's full-history master ledger (PDF + XLSX)."""
-    from datetime import date as _date
-
-    cfg = ctx.obj["config"]
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
-
-    as_of_date = None
-    if asof:
-        try:
-            as_of_date = _date.fromisoformat(asof)
-        except ValueError:
-            raise click.ClickException(f"Invalid date: {asof}. Use YYYY-MM-DD.")
-
-    try:
-        result = export_ledger(
-            firm, as_of=as_of_date, config=cfg,
-            keep_docx=keep_docx, xlsx=not no_xlsx,
-        )
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
-    click.echo(f"Ledger PDF: {result['pdf']}")
-    if "xlsx" in result:
-        click.echo(f"Ledger XLSX: {result['xlsx']}")
+    result = doc_service.export_ledger(
+        firm, as_of=asof, xlsx=not no_xlsx,
+        keep_docx=keep_docx, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 10: legacy import ──────────────────────────────────────────
@@ -330,35 +196,10 @@ def export_ledger_cmd(ctx, firm, asof, no_xlsx, keep_docx):
 @click.pass_context
 def import_legacy(ctx, firm, file_path):
     """Import cases from a legacy monthly invoice .docx into a firm's dataset."""
-    cfg = ctx.obj["config"]
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
-
-    try:
-        results = import_legacy_invoice(firm, file_path)
-    except (FileNotFoundError, ValueError) as e:
-        raise click.ClickException(str(e))
-
-    if not results:
-        click.echo("No cases found in the file.")
-        return
-
-    inserted = 0
-    updated = 0
-    for action, case in results:
-        label = "NEW" if action == "inserted" else "UPD"
-        click.echo(
-            f"  [{label}] {case['appearance_date']} | "
-            f"{case['index_number']} | {case['case_caption']} | "
-            f"${case['charge_amount']:.2f}"
-        )
-        if action == "inserted":
-            inserted += 1
-        else:
-            updated += 1
-
-    click.echo(f"\nImported {len(results)} case(s): {inserted} new, {updated} updated.")
+    result = case_service.import_legacy(firm, file_path, config=ctx.obj["config"])
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 # ── Phase 11: payment update ─────────────────────────────────────────
@@ -374,31 +215,41 @@ def import_legacy(ctx, firm, file_path):
 @click.pass_context
 def mark_paid(ctx, firm, invoice_number, status, payment_date, notes):
     """Mark an invoice as Paid, Unpaid, or Partial."""
-    cfg = ctx.obj["config"]
-    known = all_firm_names(cfg)
-    if firm not in known:
-        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
+    result = payment_service.mark_paid(
+        firm, invoice_number, status,
+        payment_date=payment_date, notes=notes,
+        config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
-    if payment_date:
-        from datetime import date as _date
-        try:
-            _date.fromisoformat(payment_date)
-        except ValueError:
-            raise click.ClickException(f"Invalid date: {payment_date}. Use YYYY-MM-DD.")
 
-    try:
-        updated = mark_payment(firm, invoice_number, status, payment_date, notes)
-    except (ValueError, FileNotFoundError) as e:
-        raise click.ClickException(str(e))
+# ── Phase 14: edit case field ─────────────────────────────────────────
 
-    click.echo(f"Payment updated: {firm}")
-    click.echo(f"  Invoice:      {invoice_number}")
-    click.echo(f"  Case:         {updated.get('case_caption', '')}")
-    click.echo(f"  Amount:       ${float(updated.get('charge_amount') or 0):,.2f}")
-    click.echo(f"  Status:       {updated.get('paid_status', '')}")
-    click.echo(f"  Payment date: {updated.get('payment_date', '')}")
-    if notes:
-        click.echo(f"  Notes:        {notes}")
+
+EDITABLE_FIELDS = sorted(["charge_amount", "court", "outcome", "case_status", "notes"])
+
+
+@cli.command("edit-case")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--index", "index_number", required=True, help="Case index number.")
+@click.option("--date", "appearance_date", required=True, help="Appearance date (YYYY-MM-DD).")
+@click.option("--field", "field_name", required=True,
+              type=click.Choice(EDITABLE_FIELDS, case_sensitive=False),
+              help="Field to edit.")
+@click.option("--value", "new_value", required=True, help="New value for the field.")
+@click.option("--reason", default=None, help="Reason for edit (required for charge_amount after invoice sent).")
+@click.pass_context
+def edit_case(ctx, firm, index_number, appearance_date, field_name, new_value, reason):
+    """Edit a single field on an existing case (with audit logging)."""
+    result = case_service.edit_case_field(
+        firm, index_number, appearance_date, field_name, new_value,
+        reason=reason, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
 
 
 if __name__ == "__main__":
