@@ -102,12 +102,16 @@ def import_legacy_invoice(
     """Parse a legacy invoice and import cases into the firm's dataset.
 
     Returns list of (action, case_dict) where action is "inserted" or "updated".
+    Holds a single firm lock for the entire batch to avoid per-row lock overhead.
     """
+    from src.file_lock import FirmFileLock
+
     cases = parse_legacy_invoice(file_path)
     results: list[tuple[str, dict]] = []
 
-    for case in cases:
-        action = upsert_row(firm_name, case)
-        results.append((action, case))
+    with FirmFileLock(firm_name):
+        for case in cases:
+            action = upsert_row(firm_name, case, _hold_lock=False)
+            results.append((action, case))
 
     return results

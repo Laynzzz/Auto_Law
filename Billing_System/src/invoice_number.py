@@ -12,11 +12,11 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from src.config import CONFIG_PATH, load_config, get_firm
-from src.dataset import dataset_path, PROJECT_ROOT
+from src.dataset import dataset_path, get_data_root
 
 
 def _counter_path(firm_name: str) -> Path:
-    return PROJECT_ROOT / "invoice" / firm_name / "invoice_counter.json"
+    return get_data_root() / "invoice" / firm_name / "invoice_counter.json"
 
 
 def _load_counter(firm_name: str) -> dict:
@@ -71,6 +71,8 @@ def assign_invoice_numbers(firm_name: str, config: dict | None = None) -> list[s
 
     Returns list of newly assigned invoice numbers.
     """
+    from src.file_lock import FirmFileLock
+
     if config is None:
         config = load_config()
 
@@ -81,22 +83,23 @@ def assign_invoice_numbers(firm_name: str, config: dict | None = None) -> list[s
             "Run 'python -m src.main init-dataset' first."
         )
 
-    wb = load_workbook(path)
-    ws = wb["cases"]
-    headers = [cell.value for cell in ws[1]]
-    inv_col = headers.index("invoice_number") + 1  # 1-based
+    with FirmFileLock(firm_name):
+        wb = load_workbook(path)
+        ws = wb["cases"]
+        headers = [cell.value for cell in ws[1]]
+        inv_col = headers.index("invoice_number") + 1  # 1-based
 
-    assigned: list[str] = []
+        assigned: list[str] = []
 
-    for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        if all(v is None for v in row):
-            continue
-        current_inv = row[inv_col - 1]  # 0-based for tuple
-        if current_inv is None or str(current_inv).strip() == "":
-            inv_num = next_invoice_number(firm_name, config)
-            ws.cell(row=row_num, column=inv_col, value=inv_num)
-            assigned.append(inv_num)
+        for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if all(v is None for v in row):
+                continue
+            current_inv = row[inv_col - 1]  # 0-based for tuple
+            if current_inv is None or str(current_inv).strip() == "":
+                inv_num = next_invoice_number(firm_name, config)
+                ws.cell(row=row_num, column=inv_col, value=inv_num)
+                assigned.append(inv_num)
 
-    wb.save(path)
-    wb.close()
+        wb.save(path)
+        wb.close()
     return assigned

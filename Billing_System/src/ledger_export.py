@@ -21,7 +21,7 @@ from openpyxl.styles import Alignment, Font, PatternFill, numbers
 from openpyxl.utils import get_column_letter
 
 from src.config import load_config
-from src.dataset import PROJECT_ROOT, load_dataset, _to_date
+from src.dataset import PROJECT_ROOT, get_data_root, load_dataset, _to_date
 from src.doc_generator import _ordinal
 
 
@@ -385,7 +385,7 @@ def export_ledger(
     date_prefix = as_of.strftime("%m-%d-%Y")
     filename = f"Ledger as of {date_prefix}"
 
-    base_dir = PROJECT_ROOT / "invoice" / firm_name / "ledger"
+    base_dir = get_data_root() / "invoice" / firm_name / "ledger"
     docx_out = base_dir / f"{filename}.docx"
     pdf_out = base_dir / f"{filename}.pdf"
 

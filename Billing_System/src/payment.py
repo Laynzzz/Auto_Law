@@ -10,7 +10,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from src.dataset import dataset_path, load_dataset, PROJECT_ROOT
+from src.dataset import dataset_path, get_data_root, load_dataset
 
 
 # ── Lookup by invoice number ─────────────────────────────────────────
@@ -57,6 +57,8 @@ def mark_payment(
     Returns the updated case dict.
     Raises ValueError if invoice not found or invalid status.
     """
+    from src.file_lock import FirmFileLock
+
     if status not in VALID_STATUSES:
         raise ValueError(f"Invalid status '{status}'. Must be one of: {VALID_STATUSES}")
 
@@ -64,64 +66,60 @@ def mark_payment(
     if not path.exists():
         raise FileNotFoundError(f"Dataset not found: {path}")
 
-    wb = load_workbook(path)
-    ws = wb["cases"]
-    headers = [cell.value for cell in ws[1]]
+    with FirmFileLock(firm_name):
+        wb = load_workbook(path)
+        ws = wb["cases"]
+        headers = [cell.value for cell in ws[1]]
 
-    row_num = _match_invoice_row(ws, headers, invoice_number)
-    if row_num is None:
+        row_num = _match_invoice_row(ws, headers, invoice_number)
+        if row_num is None:
+            wb.close()
+            raise ValueError(
+                f"Invoice '{invoice_number}' not found in {firm_name}'s dataset."
+            )
+
+        # Read current row for audit log
+        row_values = [ws.cell(row=row_num, column=c + 1).value for c in range(len(headers))]
+        old_row = dict(zip(headers, row_values))
+
+        # Update paid_status
+        ps_col = headers.index("paid_status") + 1
+        ws.cell(row=row_num, column=ps_col, value=status)
+
+        # Update payment_date
+        pd_col = headers.index("payment_date") + 1
+        if payment_date is not None:
+            if isinstance(payment_date, str):
+                payment_date = datetime.strptime(payment_date, "%Y-%m-%d").date()
+            ws.cell(row=row_num, column=pd_col, value=payment_date)
+        elif status == "Paid" and old_row.get("payment_date") is None:
+            # Auto-set payment_date to today if marking Paid and no date provided
+            ws.cell(row=row_num, column=pd_col, value=date.today())
+
+        # Update notes if provided
+        if notes is not None:
+            notes_col = headers.index("notes") + 1
+            ws.cell(row=row_num, column=notes_col, value=notes)
+
+        wb.save(path)
         wb.close()
-        raise ValueError(
-            f"Invoice '{invoice_number}' not found in {firm_name}'s dataset."
-        )
 
-    # Read current row for audit log
-    row_values = [ws.cell(row=row_num, column=c + 1).value for c in range(len(headers))]
-    old_row = dict(zip(headers, row_values))
-
-    # Update paid_status
-    ps_col = headers.index("paid_status") + 1
-    ws.cell(row=row_num, column=ps_col, value=status)
-
-    # Update payment_date
-    pd_col = headers.index("payment_date") + 1
-    if payment_date is not None:
-        if isinstance(payment_date, str):
-            payment_date = datetime.strptime(payment_date, "%Y-%m-%d").date()
-        ws.cell(row=row_num, column=pd_col, value=payment_date)
-    elif status == "Paid" and old_row.get("payment_date") is None:
-        # Auto-set payment_date to today if marking Paid and no date provided
-        ws.cell(row=row_num, column=pd_col, value=date.today())
-
-    # Update notes if provided
-    if notes is not None:
-        notes_col = headers.index("notes") + 1
-        ws.cell(row=row_num, column=notes_col, value=notes)
-
-    wb.save(path)
-    wb.close()
-
-    # Read back updated row
-    updated_row = dict(zip(
-        headers,
-        [ws.cell(row=row_num, column=c + 1).value for c in range(len(headers))]
-    ))
-
-    # Write audit log
-    _write_audit_log(firm_name, invoice_number, old_row, status, payment_date)
+        # Write audit log
+        _write_audit_log(firm_name, invoice_number, old_row, status, payment_date)
 
     # Re-read to return clean dict
     wb2 = load_workbook(path)
     ws2 = wb2["cases"]
-    updated_values = [ws2.cell(row=row_num, column=c + 1).value for c in range(len(headers))]
+    headers2 = [cell.value for cell in ws2[1]]
+    updated_values = [ws2.cell(row=row_num, column=c + 1).value for c in range(len(headers2))]
     wb2.close()
-    return dict(zip(headers, updated_values))
+    return dict(zip(headers2, updated_values))
 
 
 # ── Audit log ────────────────────────────────────────────────────────
 
 def _audit_log_path(firm_name: str) -> Path:
-    return PROJECT_ROOT / "invoice" / firm_name / "payment_log.csv"
+    return get_data_root() / "invoice" / firm_name / "payment_log.csv"
 
 
 def _write_audit_log(

@@ -18,7 +18,7 @@ from docx.shared import Pt
 from docx2pdf import convert
 
 from src.config import get_firm, load_config
-from src.dataset import PROJECT_ROOT, query_by_date_range, week_range, _to_date
+from src.dataset import PROJECT_ROOT, get_data_root, query_by_date_range, week_range, _to_date
 from src.doc_generator import _format_date_display
 
 TEMPLATE_PATH = PROJECT_ROOT / "template" / "weekly_statement.docx"
@@ -146,10 +146,10 @@ def _fill_weekly_template(
     num_cols = 4  # Date, Index No., Case Caption, Amount
 
     # Template has: row 0 = header, row 1 = template data row,
-    # rows 2-10 = empty, row 11 = total row.
-    # Pre-allocated data slots = rows 1 through 10 (10 rows).
-    pre_allocated = 10  # rows 1..10
-    total_row_idx = 11  # original index of the TOTAL row
+    # rows 2-25 = empty, row 26 = total row.
+    # Pre-allocated data slots = rows 1 through 25 (25 rows).
+    pre_allocated = 25  # rows 1..25
+    total_row_idx = 26  # original index of the TOTAL row
 
     # If we need more rows than pre-allocated, clone the template row
     if len(cases) > pre_allocated:
@@ -227,7 +227,7 @@ def generate_weekly_statement(
     week_folder = f"Week of {date_prefix}"
 
     base_dir = (
-        PROJECT_ROOT / "invoice" / firm_name
+        get_data_root() / "invoice" / firm_name
         / str(monday.year) / monday.strftime("%b") / week_folder
     )
     docx_out = base_dir / f"{week_folder}.docx"

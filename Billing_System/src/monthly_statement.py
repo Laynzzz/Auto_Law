@@ -18,7 +18,7 @@ from docx.shared import Pt
 from docx2pdf import convert
 
 from src.config import get_firm, load_config
-from src.dataset import PROJECT_ROOT, month_range, query_by_date_range, _to_date
+from src.dataset import PROJECT_ROOT, get_data_root, month_range, query_by_date_range, _to_date
 from src.doc_generator import _format_date_display
 from src.weekly_statement import _replace_in_paragraph, _set_cell_text, _clone_row, _clear_row
 
@@ -149,7 +149,7 @@ def generate_monthly_statement(
     filename = f"Monthly Statement {month_abbr} {year}"
 
     base_dir = (
-        PROJECT_ROOT / "invoice" / firm_name
+        get_data_root() / "invoice" / firm_name
         / str(year) / month_abbr
     )
     docx_out = base_dir / f"{filename}.docx"

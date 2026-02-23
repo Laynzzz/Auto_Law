@@ -1,6 +1,7 @@
 """Config loader & validator for the billing system."""
 
 import json
+import warnings
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.json"
@@ -16,6 +17,20 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
 
     _validate(config)
     return config
+
+
+def get_data_root(config: dict | None = None) -> Path:
+    """Return the shared data root path.
+
+    If shared_root is set in config, returns that path.
+    Otherwise returns the local project root (backward compatible).
+    """
+    if config is None:
+        config = load_config()
+    shared = config.get("shared_root", "")
+    if shared:
+        return Path(shared)
+    return CONFIG_PATH.parent.parent
 
 
 def _validate(config: dict) -> None:
@@ -36,6 +51,15 @@ def _validate(config: dict) -> None:
         p = project_root / rel
         if not p.exists():
             raise ValueError(f"Path '{label}' does not exist: {p}")
+
+    # Warn (not crash) if shared_root is set but path doesn't exist
+    shared = config.get("shared_root", "")
+    if shared and not Path(shared).exists():
+        warnings.warn(
+            f"shared_root path does not exist: {shared}\n"
+            "Falling back to local project root.",
+            stacklevel=2,
+        )
 
 
 def get_firm(name: str, config: dict | None = None) -> dict:

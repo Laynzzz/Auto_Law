@@ -7,6 +7,7 @@ Unique key within a firm file:  (index_number, appearance_date)
 """
 
 import calendar
+import contextlib
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from src.config import CONFIG_PATH, load_config
+from src.config import CONFIG_PATH, get_data_root as _cfg_get_data_root, load_config
 
 # ── Schema ────────────────────────────────────────────────────────────
 
@@ -51,10 +52,20 @@ UNIQUE_KEY_COLS = ("index_number", "appearance_date")
 
 PROJECT_ROOT = CONFIG_PATH.parent.parent
 
+_data_root: Path | None = None
+
+
+def get_data_root() -> Path:
+    """Return the data root path (cached after first call)."""
+    global _data_root
+    if _data_root is None:
+        _data_root = _cfg_get_data_root()
+    return _data_root
+
 
 def dataset_path(firm_name: str) -> Path:
     """Return path to a firm's master dataset: invoice/{firm_name}/master_{firm_name}.xlsx"""
-    return PROJECT_ROOT / "invoice" / firm_name / f"master_{firm_name}.xlsx"
+    return get_data_root() / "invoice" / firm_name / f"master_{firm_name}.xlsx"
 
 
 def all_firm_names(config: dict | None = None) -> list[str]:
@@ -72,6 +83,8 @@ HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
 
 def create_workbook(firm_name: str, overwrite: bool = False) -> Path:
     """Create a new master_cases.xlsx for a firm with the 'cases' sheet and headers."""
+    from src.file_lock import FirmFileLock
+
     path = dataset_path(firm_name)
 
     if path.exists() and not overwrite:
@@ -80,27 +93,28 @@ def create_workbook(firm_name: str, overwrite: bool = False) -> Path:
             "Use --force to overwrite (this will erase all data)."
         )
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    with FirmFileLock(firm_name):
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "cases"
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "cases"
 
-    # Write header row
-    for col_idx, name in enumerate(COLUMNS, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=name)
-        cell.font = HEADER_FONT
-        cell.fill = HEADER_FILL
-        cell.alignment = Alignment(horizontal="center")
+        # Write header row
+        for col_idx, name in enumerate(COLUMNS, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=name)
+            cell.font = HEADER_FONT
+            cell.fill = HEADER_FILL
+            cell.alignment = Alignment(horizontal="center")
 
-    # Auto-width based on header length
-    for col_idx, name in enumerate(COLUMNS, start=1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = max(len(name) + 4, 14)
+        # Auto-width based on header length
+        for col_idx, name in enumerate(COLUMNS, start=1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = max(len(name) + 4, 14)
 
-    # Freeze the header row
-    ws.freeze_panes = "A2"
+        # Freeze the header row
+        ws.freeze_panes = "A2"
 
-    wb.save(path)
+        wb.save(path)
     return path
 
 
@@ -332,14 +346,19 @@ def month_range(year: int, month: int) -> tuple[date, date]:
     return first, last
 
 
-def upsert_row(firm_name: str, row_data: dict) -> str:
+def upsert_row(firm_name: str, row_data: dict, _hold_lock: bool = True) -> str:
     """Insert or update a row in a firm's dataset.
 
     row_data keys should match COLUMNS (extras are ignored, missing become None).
     Uses (index_number, appearance_date) as the unique key.
 
+    _hold_lock: if True (default), acquires per-firm lock. Set to False when
+    the caller already holds the lock (e.g. batch imports).
+
     Returns "inserted" or "updated".
     """
+    from src.file_lock import FirmFileLock
+
     path = dataset_path(firm_name)
 
     if not path.exists():
@@ -348,27 +367,30 @@ def upsert_row(firm_name: str, row_data: dict) -> str:
             "Run 'python -m src.main init-dataset' first."
         )
 
-    wb = load_workbook(path)
-    ws = wb["cases"]
-    headers = [cell.value for cell in ws[1]]
+    lock = FirmFileLock(firm_name) if _hold_lock else contextlib.nullcontext()
 
-    idx_num = str(row_data.get("index_number", ""))
-    app_date = str(row_data.get("appearance_date", ""))
-    existing_row = _match_key(ws, headers, idx_num, app_date)
+    with lock:
+        wb = load_workbook(path)
+        ws = wb["cases"]
+        headers = [cell.value for cell in ws[1]]
 
-    if existing_row is not None:
-        # Update existing row — overwrite only fields that are provided
-        for col_name, value in row_data.items():
-            if col_name in headers:
-                col_idx = headers.index(col_name) + 1  # 1-based
-                ws.cell(row=existing_row, column=col_idx, value=value)
-        wb.save(path)
-        wb.close()
-        return "updated"
-    else:
-        # Append new row
-        new_row = [row_data.get(col) for col in headers]
-        ws.append(new_row)
-        wb.save(path)
-        wb.close()
-        return "inserted"
+        idx_num = str(row_data.get("index_number", ""))
+        app_date = str(row_data.get("appearance_date", ""))
+        existing_row = _match_key(ws, headers, idx_num, app_date)
+
+        if existing_row is not None:
+            # Update existing row — overwrite only fields that are provided
+            for col_name, value in row_data.items():
+                if col_name in headers:
+                    col_idx = headers.index(col_name) + 1  # 1-based
+                    ws.cell(row=existing_row, column=col_idx, value=value)
+            wb.save(path)
+            wb.close()
+            return "updated"
+        else:
+            # Append new row
+            new_row = [row_data.get(col) for col in headers]
+            ws.append(new_row)
+            wb.save(path)
+            wb.close()
+            return "inserted"

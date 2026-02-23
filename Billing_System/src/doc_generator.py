@@ -16,7 +16,7 @@ from docx import Document
 from docx2pdf import convert
 
 from src.config import get_firm, load_config
-from src.dataset import find_row_by_key, week_range, PROJECT_ROOT
+from src.dataset import find_row_by_key, get_data_root, week_range, PROJECT_ROOT
 
 TEMPLATE_PATH = PROJECT_ROOT / "template" / "perdiem.docx"
 
@@ -162,7 +162,7 @@ def generate_invoice(
     week_folder = f"Week of {monday.strftime('%m-%d-%Y')}"
 
     base_dir = (
-        PROJECT_ROOT / "invoice" / firm_name
+        get_data_root() / "invoice" / firm_name
         / year_folder / month_folder / week_folder / "report"
     )
     docx_out = base_dir / "word" / f"{filename}.docx"
