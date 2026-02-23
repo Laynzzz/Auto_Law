@@ -17,7 +17,9 @@ from src.dataset import (
 from src.doc_generator import generate_invoice
 from src.invoice_number import assign_invoice_numbers
 from src.ledger_export import export_ledger
+from src.legacy_import import import_legacy_invoice
 from src.monthly_statement import generate_monthly_statement
+from src.payment import mark_payment, find_by_invoice_number, VALID_STATUSES
 from src.weekly_statement import generate_weekly_statement
 
 
@@ -319,13 +321,84 @@ def export_ledger_cmd(ctx, firm, asof, no_xlsx, keep_docx):
         click.echo(f"Ledger XLSX: {result['xlsx']}")
 
 
-# ── Phase 11 placeholder ─────────────────────────────────────────────
+# ── Phase 10: legacy import ──────────────────────────────────────────
+
+
+@cli.command("import-legacy")
+@click.option("--firm", required=True, help="Law firm name (must match config).")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True), help="Path to legacy monthly invoice .docx file.")
+@click.pass_context
+def import_legacy(ctx, firm, file_path):
+    """Import cases from a legacy monthly invoice .docx into a firm's dataset."""
+    cfg = ctx.obj["config"]
+    known = all_firm_names(cfg)
+    if firm not in known:
+        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
+
+    try:
+        results = import_legacy_invoice(firm, file_path)
+    except (FileNotFoundError, ValueError) as e:
+        raise click.ClickException(str(e))
+
+    if not results:
+        click.echo("No cases found in the file.")
+        return
+
+    inserted = 0
+    updated = 0
+    for action, case in results:
+        label = "NEW" if action == "inserted" else "UPD"
+        click.echo(
+            f"  [{label}] {case['appearance_date']} | "
+            f"{case['index_number']} | {case['case_caption']} | "
+            f"${case['charge_amount']:.2f}"
+        )
+        if action == "inserted":
+            inserted += 1
+        else:
+            updated += 1
+
+    click.echo(f"\nImported {len(results)} case(s): {inserted} new, {updated} updated.")
+
+
+# ── Phase 11: payment update ─────────────────────────────────────────
 
 
 @cli.command("mark-paid")
-def mark_paid():
-    """(Phase 11) Mark an invoice as paid."""
-    click.echo("Not yet implemented — coming in Phase 11.")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--invoice", "invoice_number", required=True, help="Invoice number (e.g. AL2026001).")
+@click.option("--status", required=True, type=click.Choice(sorted(VALID_STATUSES), case_sensitive=False),
+              help="Payment status.")
+@click.option("--date", "payment_date", default=None, help="Payment date (YYYY-MM-DD). Auto-set to today if marking Paid.")
+@click.option("--notes", default=None, help="Optional notes about the payment.")
+@click.pass_context
+def mark_paid(ctx, firm, invoice_number, status, payment_date, notes):
+    """Mark an invoice as Paid, Unpaid, or Partial."""
+    cfg = ctx.obj["config"]
+    known = all_firm_names(cfg)
+    if firm not in known:
+        raise click.ClickException(f"Firm '{firm}' not found. Available: {known}")
+
+    if payment_date:
+        from datetime import date as _date
+        try:
+            _date.fromisoformat(payment_date)
+        except ValueError:
+            raise click.ClickException(f"Invalid date: {payment_date}. Use YYYY-MM-DD.")
+
+    try:
+        updated = mark_payment(firm, invoice_number, status, payment_date, notes)
+    except (ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"Payment updated: {firm}")
+    click.echo(f"  Invoice:      {invoice_number}")
+    click.echo(f"  Case:         {updated.get('case_caption', '')}")
+    click.echo(f"  Amount:       ${float(updated.get('charge_amount') or 0):,.2f}")
+    click.echo(f"  Status:       {updated.get('paid_status', '')}")
+    click.echo(f"  Payment date: {updated.get('payment_date', '')}")
+    if notes:
+        click.echo(f"  Notes:        {notes}")
 
 
 if __name__ == "__main__":
