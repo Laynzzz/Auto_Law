@@ -1,12 +1,14 @@
 """PySide6 GUI entry-point — MainWindow with sidebar + 3 tabs."""
 
+import os
 import sys
 import traceback
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QLocale, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QCompleter,
     QDateEdit,
     QGroupBox,
     QHBoxLayout,
@@ -54,9 +56,19 @@ class MainWindow(QMainWindow):
         # Firm selector
         sidebar.addWidget(QLabel("Firm:"))
         self._firm_combo = QComboBox()
+        self._firm_combo.setEditable(True)
+        self._firm_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self._firm_combo.setMinimumWidth(200)
         firms = all_firm_names(self._config)
         self._firm_combo.addItems(firms)
+
+        # Searchable: filters dropdown in real-time as user types
+        completer = QCompleter(firms)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._firm_combo.setCompleter(completer)
+
         sidebar.addWidget(self._firm_combo)
 
         # Filters group
@@ -129,7 +141,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
         # ── Signal wiring ─────────────────────────────────────────
-        self._firm_combo.currentTextChanged.connect(self._on_firm_changed)
+        # Use currentIndexChanged (not currentTextChanged) so partial
+        # typing in the search box doesn't trigger a firm load.
+        self._firms = set(firms)
+        self._firm_combo.currentIndexChanged.connect(self._on_firm_index_changed)
         self._add_tab.caseAdded.connect(self._cases_tab.refresh)
         self._cases_tab.caseSelected.connect(self._gen_tab.set_selected_case)
         self._payments_tab.paymentUpdated.connect(self._cases_tab.refresh)
@@ -139,11 +154,15 @@ class MainWindow(QMainWindow):
 
         # ── Initial load ─────────────────────────────────────────
         if firms:
-            self._on_firm_changed(firms[0])
+            self._on_firm_index_changed(0)
 
     # ── firm change ───────────────────────────────────────────────
 
-    def _on_firm_changed(self, firm: str):
+    def _on_firm_index_changed(self, index: int):
+        """Load firm data only when a valid item is selected from the list."""
+        firm = self._firm_combo.itemText(index)
+        if firm not in self._firms:
+            return
         self._cases_tab.load_firm(firm, self._config)
         self._add_tab.set_firm(firm, self._config)
         self._gen_tab.set_firm(firm, self._config)
@@ -203,6 +222,16 @@ def _excepthook(exc_type, exc_val, exc_tb):
 # ── Entry-point ──────────────────────────────────────────────────
 
 def main():
+    # Guard against None stdout/stderr — PyInstaller .exe without a console
+    # sets these to None, which crashes libraries like tqdm (used by docx2pdf)
+    # with "'NoneType' object has no attribute 'write'".
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
+    QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
+
     sys.excepthook = _excepthook
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
