@@ -1,11 +1,11 @@
-"""Case-data service — init, validate, add/update, assign invoices, import legacy, extract firms."""
+"""Case-data service — init, validate, add/update, assign invoices, import legacy, extract firms, bulk import."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from src.config import load_config
+from src.config import CONFIG_PATH, load_config
 from src.audit_log import append_audit
 from src.dataset import (
     COLUMNS,
@@ -454,5 +454,129 @@ def extract_firms(
             "firms_count": len(firms),
             "warnings": warnings,
             "output_path": str(out),
+        },
+    )
+
+
+# ── Phase 19: bulk import ────────────────────────────────────────────
+
+
+def bulk_import(
+    firms_json: str,
+    invoices_dir: str,
+    config: dict | None = None,
+) -> ServiceResult:
+    """Add extracted firms to config and create blank datasets.
+
+    Args:
+        firms_json: Path to the extracted firms JSON (e.g. data/extracted_firms.json).
+        invoices_dir: Path to the invoices root (used only for validation).
+        config: Optional config dict.
+
+    Returns:
+        ServiceResult with summary of firms added and datasets created.
+    """
+    config = _resolve_config(config)
+
+    # 1. Load extracted firms
+    firms_path = Path(firms_json)
+    if not firms_path.is_file():
+        return ServiceResult(success=False, message=f"File not found: {firms_json}")
+
+    with open(firms_path, "r", encoding="utf-8") as f:
+        extracted = json.load(f)
+
+    inv_dir = Path(invoices_dir)
+    if not inv_dir.is_dir():
+        return ServiceResult(success=False, message=f"Directory not found: {invoices_dir}")
+
+    # 2. Build set of existing firms (case-insensitive) and initials
+    existing_names = {f["name"].lower() for f in config["firms"]}
+    existing_initials = {f["initials"].upper() for f in config["firms"]}
+
+    # 3. Deduplicate new firms by folder_name (skip those already in config)
+    new_firms: list[dict] = []
+    seen_folders: set[str] = set()
+
+    for entry in extracted:
+        folder = entry.get("folder_name", "")
+        if not folder:
+            continue
+        if folder.lower() in existing_names:
+            continue
+        if folder.lower() in seen_folders:
+            continue
+        seen_folders.add(folder.lower())
+        new_firms.append(entry)
+
+    # 4. Resolve initials conflicts
+    used_initials = set(existing_initials)
+
+    for firm in new_firms:
+        initials = firm.get("initials", "").upper()
+        if not initials:
+            # Generate from folder name words
+            words = firm["folder_name"].split()
+            initials = "".join(w[0] for w in words if w).upper()[:3]
+
+        if initials in used_initials:
+            # Append letters from folder name until unique
+            alpha_chars = [c.upper() for c in firm["folder_name"] if c.isalpha()]
+            resolved = False
+            for ch in alpha_chars:
+                candidate = initials + ch
+                if candidate not in used_initials:
+                    initials = candidate
+                    resolved = True
+                    break
+            if not resolved:
+                for i in range(1, 100):
+                    candidate = initials + str(i)
+                    if candidate not in used_initials:
+                        initials = candidate
+                        break
+
+        firm["_resolved_initials"] = initials
+        used_initials.add(initials)
+
+    # 5. Add new firms to config and save
+    for firm in new_firms:
+        config["firms"].append({
+            "name": firm["folder_name"],
+            "initials": firm["_resolved_initials"],
+            "contact_name": firm.get("contact_name", ""),
+            "address_1": firm.get("address_1", ""),
+            "address_2": firm.get("address_2", ""),
+            "phone": firm.get("phone", ""),
+            "billing_email": firm.get("billing_email", ""),
+            "cc_emails": firm.get("cc_emails", []),
+        })
+
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+    # 6. Create blank datasets for new firms
+    datasets_created = 0
+    for firm in new_firms:
+        try:
+            create_workbook(firm["folder_name"])
+            datasets_created += 1
+        except FileExistsError:
+            pass  # already exists
+
+    # 7. Build summary
+    lines = [
+        "Bulk import complete.",
+        f"  Firms added to config: {len(new_firms)}",
+        f"  Total config firms: {len(config['firms'])}",
+        f"  Datasets created: {datasets_created}",
+    ]
+
+    return ServiceResult(
+        success=True,
+        message="\n".join(lines),
+        data={
+            "firms_added": len(new_firms),
+            "datasets_created": datasets_created,
         },
     )

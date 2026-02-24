@@ -314,5 +314,24 @@ def extract_firms(ctx, invoices_dir, output_path):
     click.echo(result.message)
 
 
+# ── Phase 19: bulk import ─────────────────────────────────────────
+
+
+@cli.command("bulk-import")
+@click.option("--firms-json", required=True,
+              help='Path to extracted firms JSON (e.g. "data/extracted_firms.json").')
+@click.option("--invoices-dir", required=True,
+              help='Path to invoices root folder (e.g. "invoice/2026 Invoices").')
+@click.pass_context
+def bulk_import_cmd(ctx, firms_json, invoices_dir):
+    """Bulk-import firms from extracted JSON and import all invoice cases."""
+    result = case_service.bulk_import(
+        firms_json, invoices_dir, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
+
+
 if __name__ == "__main__":
     cli()

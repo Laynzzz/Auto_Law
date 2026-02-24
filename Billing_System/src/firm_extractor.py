@@ -205,7 +205,8 @@ def extract_firm_info(docx_path: Path) -> dict:
             emails.append(email_match.group())
             # If there's text before the email, might be a contact name
             prefix = line[:email_match.start()].strip().rstrip(":")
-            if prefix and not _PHONE_RE.search(prefix):
+            _LABEL_WORDS = {"email", "e-mail", "mail", "e", "attn", "attention", "cc", "to"}
+            if prefix and prefix.lower() not in _LABEL_WORDS and not _PHONE_RE.search(prefix):
                 contact_names.append(prefix)
             continue
 
