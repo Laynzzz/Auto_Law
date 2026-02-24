@@ -1,10 +1,25 @@
 """Config loader & validator for the billing system."""
 
 import json
+import sys
 import warnings
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.json"
+
+def _get_base_dir() -> Path:
+    """Return the project root directory.
+
+    When running as a PyInstaller bundle (frozen), the base directory is the
+    folder containing the .exe.  In normal dev mode it is the repo root
+    (one level up from the ``src/`` package).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+BASE_DIR = _get_base_dir()
+CONFIG_PATH = BASE_DIR / "config" / "config.json"
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -46,12 +61,6 @@ def _validate(config: dict) -> None:
     if "paths" not in config:
         raise ValueError("Config must contain a 'paths' section")
 
-    project_root = CONFIG_PATH.parent.parent
-    for label, rel in config["paths"].items():
-        p = project_root / rel
-        if not p.exists():
-            raise ValueError(f"Path '{label}' does not exist: {p}")
-
     # Warn (not crash) if shared_root is set but path doesn't exist
     shared = config.get("shared_root", "")
     if shared and not Path(shared).exists():
@@ -60,6 +69,17 @@ def _validate(config: dict) -> None:
             "Falling back to local project root.",
             stacklevel=2,
         )
+
+    # Validate that declared paths exist — use shared_root when set,
+    # otherwise fall back to the directory containing config/.
+    if shared and Path(shared).exists():
+        project_root = Path(shared)
+    else:
+        project_root = CONFIG_PATH.parent.parent
+    for label, rel in config["paths"].items():
+        p = project_root / rel
+        if not p.exists():
+            raise ValueError(f"Path '{label}' does not exist: {p}")
 
 
 def get_firm(name: str, config: dict | None = None) -> dict:

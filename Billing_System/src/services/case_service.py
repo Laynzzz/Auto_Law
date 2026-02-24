@@ -1,7 +1,8 @@
-"""Case-data service — init, validate, add/update, assign invoices, import legacy."""
+"""Case-data service — init, validate, add/update, assign invoices, import legacy, extract firms."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from src.config import load_config
@@ -389,5 +390,69 @@ def edit_case_field(
             "action": action,
             "old_value": old_value,
             "new_value": coerced_value,
+        },
+    )
+
+
+# ── Phase 18: extract firm info from invoices ────────────────────────
+
+
+def extract_firms(
+    invoices_dir: str,
+    output_path: str | None = None,
+    config: dict | None = None,
+) -> ServiceResult:
+    """Scan invoice folders, extract firm metadata, write preview JSON.
+
+    Args:
+        invoices_dir: Path to the invoices root (e.g. "invoice/2026 Invoices").
+        output_path: Where to write the preview JSON. Defaults to data/extracted_firms.json.
+        config: Optional config dict.
+
+    Returns:
+        ServiceResult with count of firms extracted and any warnings.
+    """
+    from src.firm_extractor import scan_all_firms
+
+    config = _resolve_config(config)
+
+    inv_path = Path(invoices_dir)
+    if not inv_path.is_dir():
+        return ServiceResult(
+            success=False,
+            message=f"Directory not found: {invoices_dir}",
+        )
+
+    firms, warnings = scan_all_firms(inv_path)
+
+    # Determine output path
+    if output_path is None:
+        data_dir = Path(config.get("paths", {}).get("data_dir", "data"))
+        data_dir.mkdir(parents=True, exist_ok=True)
+        out = data_dir / "extracted_firms.json"
+    else:
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write preview JSON
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(firms, f, indent=2, ensure_ascii=False)
+
+    # Build summary
+    lines: list[str] = []
+    lines.append(f"Extracted {len(firms)} firm(s) from {invoices_dir}")
+    if warnings:
+        lines.append(f"\nWarnings ({len(warnings)}):")
+        for w in warnings:
+            lines.append(f"  - {w}")
+    lines.append(f"\nPreview written to: {out}")
+
+    return ServiceResult(
+        success=True,
+        message="\n".join(lines),
+        data={
+            "firms_count": len(firms),
+            "warnings": warnings,
+            "output_path": str(out),
         },
     )

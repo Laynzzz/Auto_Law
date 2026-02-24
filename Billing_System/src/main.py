@@ -5,7 +5,7 @@ import click
 from src.config import load_config
 from src.dataset import COLUMNS, VALID_CASE_STATUSES
 from src.payment import VALID_STATUSES
-from src.services import case_service, doc_service, payment_service
+from src.services import case_service, doc_service, email_service, payment_service
 
 
 @click.group()
@@ -246,6 +246,68 @@ def edit_case(ctx, firm, index_number, appearance_date, field_name, new_value, r
     result = case_service.edit_case_field(
         firm, index_number, appearance_date, field_name, new_value,
         reason=reason, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
+
+
+# ── Phase 15: email drafts ───────────────────────────────────────────
+
+
+@cli.command("draft-daily")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--index", "index_number", required=True, help="Case index number.")
+@click.option("--date", "appearance_date", required=True, help="Appearance date (YYYY-MM-DD).")
+@click.pass_context
+def draft_daily(ctx, firm, index_number, appearance_date):
+    """Create an Outlook draft email for a daily per-diem invoice."""
+    result = email_service.draft_daily(
+        firm, index_number, appearance_date, config=ctx.obj["config"],
+    )
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
+
+
+@cli.command("draft-weekly")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--week-of", required=True, help="Any date within the week (YYYY-MM-DD).")
+@click.pass_context
+def draft_weekly(ctx, firm, week_of):
+    """Create an Outlook draft email for a weekly statement."""
+    result = email_service.draft_weekly(firm, week_of, config=ctx.obj["config"])
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
+
+
+@cli.command("draft-monthly")
+@click.option("--firm", required=True, help="Law firm name.")
+@click.option("--year", required=True, type=int, help="Year (e.g. 2026).")
+@click.option("--month", required=True, type=int, help="Month number (1-12).")
+@click.pass_context
+def draft_monthly(ctx, firm, year, month):
+    """Create an Outlook draft email for a monthly statement."""
+    result = email_service.draft_monthly(firm, year, month, config=ctx.obj["config"])
+    if not result.success:
+        raise click.ClickException(result.message)
+    click.echo(result.message)
+
+
+# ── Phase 18: extract firm info from invoices ──────────────────────
+
+
+@cli.command("extract-firms")
+@click.option("--dir", "invoices_dir", required=True,
+              help='Path to invoices folder (e.g. "invoice/2026 Invoices").')
+@click.option("--output", "output_path", default=None,
+              help="Output JSON path (default: data/extracted_firms.json).")
+@click.pass_context
+def extract_firms(ctx, invoices_dir, output_path):
+    """Scan invoice folders and extract firm contact metadata to a preview JSON."""
+    result = case_service.extract_firms(
+        invoices_dir, output_path=output_path, config=ctx.obj["config"],
     )
     if not result.success:
         raise click.ClickException(result.message)
