@@ -12,7 +12,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from src.config import CONFIG_PATH, load_config, get_firm
-from src.dataset import dataset_path, get_data_root
+from src.dataset import dataset_path, get_data_root, _is_v2_format
 
 
 def _counter_path(firm_name: str) -> Path:
@@ -69,6 +69,7 @@ def next_invoice_number(firm_name: str, config: dict | None = None) -> str:
 def assign_invoice_numbers(firm_name: str, config: dict | None = None) -> list[str]:
     """Assign invoice numbers to all rows in a firm's dataset that lack one.
 
+    Handles both v1 (single 'cases' sheet) and v2 ('appearances' sheet) formats.
     Returns list of newly assigned invoice numbers.
     """
     from src.file_lock import FirmFileLock
@@ -85,7 +86,13 @@ def assign_invoice_numbers(firm_name: str, config: dict | None = None) -> list[s
 
     with FirmFileLock(firm_name):
         wb = load_workbook(path)
-        ws = wb["cases"]
+
+        # Pick the right sheet: 'appearances' for v2, 'cases' for v1
+        if _is_v2_format(wb):
+            ws = wb["appearances"]
+        else:
+            ws = wb["cases"]
+
         headers = [cell.value for cell in ws[1]]
         inv_col = headers.index("invoice_number") + 1  # 1-based
 

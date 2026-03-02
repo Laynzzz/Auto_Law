@@ -10,7 +10,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from src.dataset import dataset_path, get_data_root, load_dataset
+from src.dataset import dataset_path, get_data_root, load_dataset, _is_v2_format
 
 
 # ── Lookup by invoice number ─────────────────────────────────────────
@@ -54,6 +54,7 @@ def mark_payment(
 ) -> dict:
     """Update paid_status (and optionally payment_date, notes) for a case.
 
+    Handles both v1 ('cases' sheet) and v2 ('appearances' sheet) formats.
     Returns the updated case dict.
     Raises ValueError if invoice not found or invalid status.
     """
@@ -68,7 +69,15 @@ def mark_payment(
 
     with FirmFileLock(firm_name):
         wb = load_workbook(path)
-        ws = wb["cases"]
+
+        # Pick the right sheet and notes column name
+        if _is_v2_format(wb):
+            ws = wb["appearances"]
+            notes_col_name = "payment_notes"
+        else:
+            ws = wb["cases"]
+            notes_col_name = "notes"
+
         headers = [cell.value for cell in ws[1]]
 
         row_num = _match_invoice_row(ws, headers, invoice_number)
@@ -98,22 +107,18 @@ def mark_payment(
 
         # Update notes if provided
         if notes is not None:
-            notes_col = headers.index("notes") + 1
-            ws.cell(row=row_num, column=notes_col, value=notes)
+            nc = headers.index(notes_col_name) + 1
+            ws.cell(row=row_num, column=nc, value=notes)
 
         wb.save(path)
         wb.close()
 
         # Write audit log
+        # For audit, map back to case_caption from the merged view
         _write_audit_log(firm_name, invoice_number, old_row, status, payment_date)
 
-    # Re-read to return clean dict
-    wb2 = load_workbook(path)
-    ws2 = wb2["cases"]
-    headers2 = [cell.value for cell in ws2[1]]
-    updated_values = [ws2.cell(row=row_num, column=c + 1).value for c in range(len(headers2))]
-    wb2.close()
-    return dict(zip(headers2, updated_values))
+    # Re-read to return clean merged dict
+    return find_by_invoice_number(firm_name, invoice_number) or {}
 
 
 # ── Audit log ────────────────────────────────────────────────────────
@@ -135,6 +140,9 @@ def _write_audit_log(
 
     file_exists = log_path.exists()
 
+    # old_row may come from v2 appearances sheet (no case_caption) or v1 (has it)
+    caption = old_row.get("case_caption") or old_row.get("caption", "")
+
     with open(log_path, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
@@ -145,7 +153,7 @@ def _write_audit_log(
         writer.writerow([
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             invoice_number,
-            old_row.get("case_caption", ""),
+            caption,
             old_row.get("paid_status", ""),
             new_status,
             str(payment_date) if payment_date else "",

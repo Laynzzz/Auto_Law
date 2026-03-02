@@ -333,5 +333,22 @@ def bulk_import_cmd(ctx, firms_json, invoices_dir):
     click.echo(result.message)
 
 
+# ── Phase 20: migrate v1 -> v2 ────────────────────────────────────
+
+
+@cli.command("migrate-v2")
+@click.option("--firm", default=None, help="Firm name (omit to migrate all firms).")
+@click.option("--dry-run", is_flag=True, help="Preview changes without writing.")
+@click.pass_context
+def migrate_v2(ctx, firm, dry_run):
+    """Migrate firm dataset(s) from v1 (flat) to v2 (cases + appearances)."""
+    result = case_service.migrate_v2(
+        firm=firm, dry_run=dry_run, config=ctx.obj["config"],
+    )
+    click.echo(result.message)
+    if not result.success:
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     cli()

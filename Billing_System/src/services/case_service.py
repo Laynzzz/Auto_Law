@@ -8,6 +8,8 @@ from pathlib import Path
 from src.config import CONFIG_PATH, load_config
 from src.audit_log import append_audit
 from src.dataset import (
+    CASE_COLUMNS,
+    APPEARANCE_COLUMNS,
     COLUMNS,
     VALID_CASE_STATUSES,
     all_firm_names,
@@ -64,9 +66,8 @@ def init_datasets(
             return ServiceResult(success=False, message=str(exc))
 
     lines = [f"Created: {p}" for p in created]
-    lines.append(f"\n  Sheet: cases")
-    lines.append(f"  Columns ({len(COLUMNS)}): {', '.join(COLUMNS)}")
-    lines.append(f"  Initialized {len(firms)} firm(s).")
+    lines.append(f"\n  Sheets: cases ({len(CASE_COLUMNS)} cols), appearances ({len(APPEARANCE_COLUMNS)} cols)")
+    lines.append(f"  Initialized {len(firms)} firm(s) in v2 format.")
 
     return ServiceResult(
         success=True,
@@ -580,3 +581,56 @@ def bulk_import(
             "datasets_created": datasets_created,
         },
     )
+
+
+# ── Phase 20: migrate v1 -> v2 ────────────────────────────────────────
+
+
+def migrate_v2(
+    firm: str | None = None,
+    dry_run: bool = False,
+    config: dict | None = None,
+) -> ServiceResult:
+    """Migrate firm dataset(s) from v1 (flat) to v2 (cases + appearances).
+
+    If firm is None, migrates all firms. Supports --dry-run mode.
+    Returns migration summary in ``data``.
+    """
+    from src.migrate_v2 import migrate_firm, migrate_all_firms
+
+    config = _resolve_config(config)
+
+    if firm:
+        err = _validate_firm(firm, config)
+        if err:
+            return ServiceResult(success=False, message=err)
+
+        result = migrate_firm(firm, dry_run=dry_run)
+        lines = [result["message"]]
+        if result["errors"]:
+            lines.append(f"\nValidation errors: {len(result['errors'])}")
+
+        return ServiceResult(
+            success=result["status"] not in ("error",),
+            message="\n".join(lines),
+            data=result,
+        )
+    else:
+        summary = migrate_all_firms(config=config, dry_run=dry_run)
+        lines: list[str] = []
+        for firm_result in summary["firms"]:
+            lines.append(firm_result["message"])
+        lines.append("")
+        lines.append(
+            f"Summary: {summary['migrated']} migrated, "
+            f"{summary['already_v2']} already v2, "
+            f"{summary['skipped']} skipped, "
+            f"{summary['errors']} errors "
+            f"(out of {summary['total']} firms)"
+        )
+
+        return ServiceResult(
+            success=summary["errors"] == 0,
+            message="\n".join(lines),
+            data=summary,
+        )

@@ -23,6 +23,8 @@ AUDIT_COLUMNS = [
     "old_value",
     "new_value",
     "reason",
+    "case_id",
+    "appearance_id",
 ]
 
 
@@ -39,10 +41,13 @@ def append_audit(
     old_value,
     new_value,
     reason: str | None = None,
+    case_id: str | None = None,
+    appearance_id: str | None = None,
 ) -> None:
     """Append one audit row to the shared audit log CSV.
 
     Creates the file with headers if it doesn't exist yet.
+    Optional case_id and appearance_id are recorded when available (v2 format).
     """
     log_path = _audit_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,4 +69,6 @@ def append_audit(
             str(old_value) if old_value is not None else "",
             str(new_value) if new_value is not None else "",
             reason or "",
+            case_id or "",
+            appearance_id or "",
         ])
